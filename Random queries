@@ -1,0 +1,156 @@
+/*Какие кабинеты чаще всего использовались для проведения занятий? Выведите те, которые использовались максимальное количество раз.*/
+WITH classroom_att AS (
+	SELECT classroom,
+		COUNT(classroom) AS cnt
+	FROM Schedule
+	GROUP BY 1
+)
+SELECT classroom
+FROM classroom_att
+WHERE cnt = (
+		SELECT MAX(cnt)
+		FROM classroom_att
+	);
+
+/*Выведите идентификаторы преподавателей, которые хотя бы один раз за всё время преподавали в каждом из одиннадцатых классов.*/
+SELECT teacher
+FROM (
+		SELECT DISTINCT teacher
+		FROM Schedule
+		WHERE class = (
+				SELECT id
+				FROM Class
+				WHERE name = '11 A'
+			)
+		UNION ALL
+		SELECT DISTINCT teacher
+		FROM Schedule
+		WHERE class = (
+				SELECT id
+				FROM Class
+				WHERE name = '11 B'
+			)
+	) AS a
+GROUP BY teacher
+HAVING COUNT(teacher) > 1;
+
+/*Для каждой комнаты, которую снимали как минимум 1 раз, найдите имя человека, снимавшего ее последний раз, и дату, когда он выехал*/
+WITH r AS (
+	SELECT room_id,
+		MAX(end_date) AS end_date
+	FROM Reservations
+	GROUP BY 1
+)
+SELECT re.room_id,
+	u.name,
+	re.end_date
+FROM Reservations re
+	INNER JOIN Users u ON u.id = re.user_id
+	INNER JOIN r ON r.room_id = re.room_id
+WHERE r.end_date = re.end_date;
+
+/*Вывести идентификаторы всех владельцев комнат, что размещены на сервисе бронирования жилья и сумму, которую они заработали*/
+SELECT owner_id,
+	SUM(COALESCE(total, 0)) AS total_earn
+FROM Rooms ro
+	LEFT JOIN Reservations re ON re.room_id = ro.id
+GROUP BY 1;
+
+/*Найдите какой процент пользователей, зарегистрированных на сервисе бронирования, хоть раз арендовали или сдавали в аренду жилье. Результат округлите до сотых.*/
+WITH active_users AS (
+	SELECT user_id
+	FROM Reservations
+	UNION
+	SELECT owner_id
+	FROM Rooms
+		INNER JOIN Reservations ON Rooms.id = Reservations.room_id
+)
+SELECT ROUND(
+		(
+			SELECT COUNT(user_id)
+			FROM active_users
+		) / COUNT(id) * 100,
+		2
+	) AS percent
+FROM Users;
+
+/*Вам предоставлена таблица транзакций Uber, совершенных пользователями. Напишите запрос для получения третьей транзакции каждого пользователя, если такая существует.
+Если такой транзакции нет, то выводить пользователя не нужно. Выведите идентификатор пользователя, сколько он потратил и дату транзакции*/
+SELECT user_id,
+	spend,
+	transaction_date
+FROM (
+		SELECT *,
+			ROW_NUMBER() OVER (
+				PARTITION BY user_id
+				ORDER BY transaction_date ASC
+			) AS rn
+		FROM transactions
+	) AS t
+WHERE rn = 3;
+
+/*В нашей компании замеряется такой показатель, как “30-дневная активная база”. Для любого дня — это число клиентов за предыдущие 30 дней.
+(Например, для 2022-01-01 — это число уникальных клиентов, совершивших визит за 30 дней до 2022-01-01, включая 2022-01-01.
+Для 2022-01-02 - это число уникальных клиентов, совершивших визит за 30 дней до 2022-01-02, включая 2022-01-02 и т.д.).*/
+WITH RECURSIVE DateRange AS (
+	SELECT '2022-01-01' AS date
+	UNION ALL
+	SELECT DATE_ADD(date, INTERVAL 1 DAY)
+	FROM DateRange
+	WHERE date < '2022-06-30'
+)
+SELECT cityname,
+	dr.date,
+	COUNT(DISTINCT clientid) active_base
+FROM daterange dr
+	LEFT JOIN sales ON sales.date BETWEEN SUBDATE(dr.date, INTERVAL 29 DAY)
+	AND dr.date
+GROUP BY cityname,
+	dr.date
+ORDER BY cityname,
+	dr.date;
+
+/*В Учи.ру дети решают задания, доступ к заданиям платный. Однако учитель может включить функцию «Урок», и в течение часа все задания станут бесплатными.*/
+WITH tsk_lsn AS (
+	SELECT user_id,
+		COUNT(task_id) AS cnt
+	FROM sessions
+		INNER JOIN lessons USING(teacher_id)
+	WHERE session_time BETWEEN lesson_start AND lesson_end
+	GROUP BY 1
+),
+tsk_all AS (
+	SELECT user_id,
+		COUNT(task_id) AS count
+	FROM sessions
+	GROUP BY 1
+),
+tsk_st AS (
+	SELECT tsk_lsn.user_id,
+		cnt / count * 100 AS percent
+	FROM tsk_lsn,
+		tsk_all
+	WHERE tsk_lsn.user_id = tsk_all.user_id
+	HAVING percent > 50
+)
+SELECT COUNT(user_id) AS amount_students
+FROM tsk_st;
+
+/*Посчитай сколько транзакций в среднем делают пользователи в течение 72-ух часов с момента первой транзакции*/
+WITH fd AS (
+	SELECT user_id,
+		MIN(transaction_ts) as min_date
+	FROM Transactions
+	GROUP BY user_id
+),
+nt AS (
+	SELECT user_id,
+		COUNT(transaction_id) AS count
+	FROM Transactions
+		INNER JOIN fd USING(user_id)
+	WHERE transaction_ts >= fd.min_date
+		AND transaction_ts <= fd.min_date + INTERVAL 72 hour
+	GROUP BY user_id
+)
+SELECT AVG(nt.count) AS avg_transactions
+FROM nt;
