@@ -1,0 +1,46 @@
+WITH first_payments as
+    (
+    SELECT user_id,
+    MIN (transaction_datetime::date) as first_payment_date
+    FROM cadmus_db.payments
+    WHERE status_name = 'success'
+    GROUP BY user_id
+    ),
+all_dates as
+    (
+    SELECT DISTINCT class_start_datetime::date as dt, user_id
+    FROM cadmus_db.classes
+    WHERE date_part ('year', class_start_datetime) = '2022'
+        AND class_status in ('success','failed_by_student')
+    ),
+payments_by_dates as
+    (
+    SELECT user_id, transaction_datetime::date as payment_date,
+    SUM (classes) as transaction_balance_change
+    FROM cadmus_db.payments
+    WHERE status_name='success'
+    GROUP BY user_id, payment_date
+    ),
+all_dates_by_user as
+    (
+    SELECT first_payments.user_id, dt
+    FROM first_payments
+        INNER JOIN all_dates
+            ON first_payments.user_id = all_dates.user_id
+            AND first_payments.first_payment_date < all_dates.dt
+    ),
+classes_by_dates as
+    (
+    SELECT user_id, class_start_datetime, count (id_class)*(-1) as class_number
+    FROM cadmus_db.classes
+    WHERE class_type !='trial'
+        AND class_status in ('success', 'failed_by_student')
+    GROUP BY user_id, class_start_datetime
+    )
+SELECT all_dates_by_user.*,
+        payments_by_dates.transaction_balance_change,
+        sum (transaction_balance_change) over (partition by all_dates_by_user.user_id order by dt asc) as transaction_balance_change_cs
+FROM all_dates_by_user
+    LEFT JOIN payments_by_dates
+    ON all_dates_by_user.dt = payments_by_dates.payment_date
+    AND all_dates_by_user.user_id = payments_by_dates.user_id
